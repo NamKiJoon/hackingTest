@@ -22,69 +22,47 @@ attack_logs = []
 def log_request_info():
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # 요청 정보 수집
+    # 원본 요청 데이터 추출
+    request_body = request.get_data(as_text=True)  # 요청 바디 (raw 데이터)
+    request_query = request.query_string.decode()  # URL 쿼리 스트링
+
+    # 공격 패턴 탐지 (기존 로직 유지)
+    is_attack = False
+    attack_type = []
+
+    sql_patterns = ["'", ";", "--", "/*", "*/", "UNION", "SELECT", "DROP", "DELETE", "UPDATE", "INSERT"]
+    for pattern in sql_patterns:
+        if pattern.lower() in request_body.lower() or pattern.lower() in request_query.lower():
+            is_attack = True
+            attack_type.append("SQL Injection")
+            break
+
+    # 로그 데이터 저장
     log_data = {
         'timestamp': timestamp,
         'method': request.method,
         'path': request.path,
         'ip': request.remote_addr,
         'headers': dict(request.headers),
-        'args': dict(request.args),
-        'form': dict(request.form),
-        'json': request.json if request.is_json else None,
+        'body': request_body,
+        'query': request_query,
+        'is_attack': is_attack,
+        'attack_type': attack_type if is_attack else None,
+        'curl_command': f'curl -X {request.method} "{request.base_url}?{request_query}" -H "Content-Type: application/x-www-form-urlencoded" -d "{request_body}"'
     }
-    
-    # 공격 의심 패턴 체크
-    is_attack = False
-    attack_type = []
-    
-    # SQL 인젝션 체크
-    sql_patterns = ["'", ";", "--", "/*", "*/", "UNION", "SELECT", "DROP", "DELETE", "UPDATE", "INSERT"]
-    for pattern in sql_patterns:
-        request_form_str = str(request.form).lower()
-        request_args_str = str(request.args).lower()
-        
-        if pattern.lower() in request_form_str or pattern.lower() in request_args_str:
-            is_attack = True
-            attack_type.append("SQL Injection")
-            break
-    
-    # XSS 체크
-    xss_patterns = ["<script>", "javascript:", "onclick", "onerror", "onload", "alert(", "eval("]
-    for pattern in xss_patterns:
-        request_form_str = str(request.form).lower()
-        request_args_str = str(request.args).lower()
-        
-        if pattern.lower() in request_form_str or pattern.lower() in request_args_str:
-            is_attack = True
-            if "XSS" not in attack_type:
-                attack_type.append("XSS")
-            break
-    
-    # 경로 조작 체크
-    if "../" in request.path or "..%2f" in request.path:
-        is_attack = True
-        attack_type.append("Path Traversal")
-    
-    # 공격 의심 정보 추가
-    log_data['is_attack'] = is_attack
-    log_data['attack_type'] = attack_type if is_attack else None
-    
-    # 로그 저장
+
+    # 공격 로그 저장
     request_logs.append(log_data)
     if is_attack:
         attack_logs.append(log_data)
         logger.warning(f"공격 의심: {attack_type} - {request.path}")
-    
+        logger.warning(f"공격 curl 명령어: {log_data['curl_command']}")
+
     # 로그 크기 제한 (최근 100개만 유지)
     if len(request_logs) > 100:
         request_logs.pop(0)
     if len(attack_logs) > 50:
         attack_logs.pop(0)
-    
-    logger.debug(f"{timestamp} - {request.method} {request.path}")
-    logger.debug(f"Headers: {request.headers}")
-    logger.debug(f"Body: {request.get_data()}")
 
 # 오류 핸들러
 @app.errorhandler(Exception)
@@ -259,80 +237,56 @@ def view_attack_logs():
     <html>
     <head>
         <title>공격 의심 로그</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-            h1 { color: #333; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-            th { background-color: #f2f2f2; }
-            tr:hover { background-color: #f5f5f5; }
-            .sql-injection { background-color: #ffcccc; }
-            .xss { background-color: #ccffcc; }
-            .path-traversal { background-color: #ccccff; }
-            .details-btn { cursor: pointer; color: blue; text-decoration: underline; }
-            .details { display: none; white-space: pre-wrap; font-family: monospace; }
-            .nav { margin: 20px 0; }
-            .nav a { margin-right: 15px; text-decoration: none; color: #0066cc; }
-            .reload { float: right; }
-        </style>
-        <script>
-            function toggleDetails(id) {
-                var details = document.getElementById('attack-details-' + id);
-                if (details.style.display === 'none') {
-                    details.style.display = 'block';
-                } else {
-                    details.style.display = 'none';
-                }
-            }
-            
-            function refreshPage() {
-                location.reload();
-            }
-            
-            // 5초마다 자동 새로고침
-            setTimeout(refreshPage, 5000);
-        </script>
     </head>
     <body>
         <h1>공격 의심 로그</h1>
         <div class="nav">
             <a href="/">홈</a>
             <a href="/logs">모든 로그 보기</a>
-            <button class="reload" onclick="refreshPage()">새로고침</button>
         </div>
         
         {% if logs %}
             <table>
-                <tr>
-                    <th>시간</th>
-                    <th>공격 유형</th>
-                    <th>메소드</th>
-                    <th>경로</th>
-                    <th>IP</th>
-                    <th>상세</th>
-                </tr>
-                {% for i, log in enumerate(reversed(logs)) %}
-                    <tr class="{{ (log.get('attack_type', [''])[0].lower().replace(' ', '-') if log.get('attack_type') and log.get('attack_type')[0] else '') }}">
-                        <td>{{ log.get('timestamp') }}</td>
-                        <td><strong>{{ ', '.join(log.get('attack_type', [])) }}</strong></td>
-                        <td>{{ log.get('method') }}</td>
-                        <td>{{ log.get('path') }}</td>
-                        <td>{{ log.get('ip') }}</td>
-                        <td><span class="details-btn" onclick="toggleDetails({{ i }})">상세 보기</span></td>
-                    </tr>
-                    <tr>
-                        <td colspan="6">
-                            <div id="attack-details-{{ i }}" class="details">{{ json.dumps(log, indent=2) }}</div>
-                        </td>
-                    </tr>
-                {% endfor %}
-            </table>
+    <tr>
+        <th>시간</th>
+        <th>공격 유형</th>
+        <th>메소드</th>
+        <th>경로</th>
+        <th>IP</th>
+        <th>상세</th>
+        <th>Curl 명령어</th>
+    </tr>
+   {% for i, log in enumerate(logs | reverse) %}
+        <tr>
+            <td>{{ log.get('timestamp') }}</td>
+            <td><strong>{{ ', '.join(log.get('attack_type', [])) }}</strong></td>
+            <td>{{ log.get('method') }}</td>
+            <td>{{ log.get('path') }}</td>
+            <td>{{ log.get('ip') }}</td>
+            <td>
+                <span class="details-btn" onclick="toggleDetails({{ i }})">상세 보기</span>
+            </td>
+            <td>
+                <code>{{ log.get('curl_command', 'N/A') }}</code>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="7">
+                <div id="details-{{ i }}" class="details">
+                    {{ json.dumps(log, indent=2) }}
+                </div>
+            </td>
+        </tr>
+    {% endfor %}
+</table>
+
         {% else %}
             <p>아직 공격 의심 로그가 없습니다.</p>
         {% endif %}
     </body>
     </html>
-    """, logs=attack_logs, enumerate=enumerate, json=json)
+   """, logs=list(reversed(attack_logs)), enumerate=enumerate, json=json)
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8081))
