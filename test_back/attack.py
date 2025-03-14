@@ -15,8 +15,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger('TrafficMirror')
 
 # 설정 변수 (실제 환경에 맞게 조정)
-PROD_SERVER = "localhost:8080"  # 운영 서버 주소
-DEV_SERVER = "localhost:8081"   # 개발 서버 주소
+PROD_SERVER = "localhost:8080"  # 실제 운영 서버 주소를 넣어야함 ( 실제 해킹 들어올 곳 )
+DEV_SERVER = "localhost:8081"   # 실제 개발 서버 주소를 넣어야함 ( 가져와서 재연 해볼곳 )
 INTERFACE = "lo"                # 네트워크 인터페이스 (로컬호스트)
 
 # 요청 큐
